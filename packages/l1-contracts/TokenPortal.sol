@@ -9,13 +9,13 @@ import {IInbox} from "@aztec/l1-contracts/src/core/interfaces/messagebridge/IInb
 import {IOutbox} from "@aztec/l1-contracts/src/core/interfaces/messagebridge/IOutbox.sol";
 import {DataStructures} from "@aztec/l1-contracts/src/core/libraries/DataStructures.sol";
 import {Hash} from "@aztec/l1-contracts/src/core/libraries/Hash.sol";
+import {IRollup} from "@aztec/l1-contracts/src/core/interfaces/IRollup.sol";
 
 
 
 contract TokenPortal {
+
     using SafeERC20 for IERC20;
-
-
 
     IRegistry public registry;
     IERC20 public underlying;
@@ -26,16 +26,14 @@ contract TokenPortal {
         bytes32 to, 
         uint256 amount, 
         bytes32 secretHash, 
-        bytes32 key, 
-        uint256 nonce
+        bytes32 key
     );
 
     event DepositToAztecPrivate(
         bytes32 secretHashForRedeemingMintedNotes,
         uint256 amount,
         bytes32 secretHashForL2MessageConsumption,
-        bytes32 key,
-        uint256 index
+        bytes32 key
     );
 
 
@@ -53,11 +51,11 @@ contract TokenPortal {
     * @return The key of the entry in the Inbox and its leaf index
     */
 
-    function depositToAztecPublic(bytes32 _to, uint256 _amount, bytes32 _secretHash) external returns (bytes32, uint256)
+    function depositToAztecPublic(bytes32 _to, uint256 _amount, bytes32 _secretHash) external returns (bytes32)
     {
 
         // Preamble
-        IInbox inbox = IRollup(registry.getRollup()).getInbox();
+        IInbox inbox = IRollup(registry.getRollup()).INBOX();
         DataStructures.L2Actor memory actor = DataStructures.L2Actor(l2Bridge,1);
 
         // Hash the message content to be reconstructed in the receiving contract
@@ -67,11 +65,12 @@ contract TokenPortal {
         underlying.safeTransferFrom(msg.sender, address(this), _amount);
 
         // Send message to rollup
-        (bytes32 key, uint256 index) = inbox.sendL2Message(actor, contentHash, _secretHash);
+        (bytes32 key) = inbox.sendL2Message(actor, contentHash, _secretHash);
 
-        emit DepositToAztecPublic(_to, _amount, _secretHash, key, index);
+        // Emit event
+        emit DepositToAztecPublic(_to, _amount, _secretHash, key);
 
-        return (key, index);
+        return (key);
 
         
     }
@@ -87,11 +86,11 @@ contract TokenPortal {
         bytes32 _secretHashForRedeemingMintedNotes,
         bytes32 _secretHashForL2MessageConsumption,
         uint256 _amount
-    ) external returns (bytes32, uint256){
+    ) external returns (bytes32){
 
         // Preamble
         IInbox inbox = IRollup(registry.getRollup()).INBOX();
-        DataStructures.L2Actor memory actor = DataStructures.L2(l2Bridge, 1);
+        DataStructures.L2Actor memory actor = DataStructures.L2Actor(l2Bridge, 1);
 
         // Hash the message content to be reconstructed in the receiving contract
         bytes32 contentHash = Hash.sha256ToField(abi.encodeWithSignature(
@@ -103,16 +102,60 @@ contract TokenPortal {
         underlying.safeTransferFrom(msg.sender, address(this), _amount);
 
         // Send message to rollup
-        (bytes32 key, uint256 index) = inbox.sendL2Message(actor, contentHash, _secretHashForL2MessageConsumption);
+        (bytes32 key) = inbox.sendL2Message(actor, contentHash, _secretHashForL2MessageConsumption);
          
          // Emit event
          emit DepositToAztecPrivate(
-            _secretHashForRedeemingMintedNotes, _amount, _secretHasForL2MessageConsumption, key, index
+            _secretHashForRedeemingMintedNotes, _amount, _secretHashForL2MessageConsumption, key
          );
 
-        return (key, index);
+        return (key);
 
 
     }
 
+    
+
+        /**
+    * @notice Withdraw funds from the portal
+    * @dev Second part of withdraw, must be initiated from L2 first as it will consume a message from outbox
+    * @param _recipient - The address to send the funds to
+    * @param _amount - The amount to withdraw
+    * @param _withCaller - Flag to use `msg.sender` as caller, otherwise address(0)
+    * @param _l2BlockNumber - The address to send the funds to
+    * @param _leafIndex - The amount to withdraw
+    * @param _path - Flag to use `msg.sender` as caller, otherwise address(0)
+    * Must match the caller of the message (specified from L2) to consume it.
+    */
+    function withdraw(
+    address _recipient,
+    uint256 _amount,
+    bool _withCaller, // determines the appropiate party that can execute this function, address should match the callerOnL1 address we passed in the aztec when withdrawing from L2.
+    uint256 _l2BlockNumber,
+    uint256 _leafIndex,
+    bytes32[] calldata _path
+    ) external {
+
+    DataStructures.L2ToL1Msg memory message = DataStructures.L2ToL1Msg({
+        sender: DataStructures.L2Actor(l2Bridge, 1),
+        recipient: DataStructures.L1Actor(address(this), block.chainid),
+        content: Hash.sha256ToField(
+        abi.encodeWithSignature(
+            "withdraw(address,uint256,address)",
+            _recipient,
+            _amount,
+            _withCaller ? msg.sender : address(0)
+        )
+        )
+    });
+
+    IOutbox outbox = IRollup(registry.getRollup()).OUTBOX();
+
+    outbox.consume(message, _l2BlockNumber, _leafIndex, _path);
+
+    underlying.transfer(_recipient, _amount);
+    }
+
+
+    // We call this pattern designed caller which enables a new paradigm where we can construct other such portals that talk to the token portal and therefore create more seamless crosschain legos between L1 and L2.
 }

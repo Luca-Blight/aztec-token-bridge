@@ -21,6 +21,9 @@
     "hardhat": "^2.22.15",
     "hardhat-gas-reporter": "^2.2.1",
     "solidity-coverage": "^0.8.13",
+    "@uniswap/sdk-core": "^5.9.0",
+    "@uniswap/v3-periphery": "^1.4.4",
+    "@uniswap/v3-sdk": "^3.18.1",
     "ts-node": "^10.9.2",
     "typechain": "^8.3.2",
     "typescript": "^5.6.3"
